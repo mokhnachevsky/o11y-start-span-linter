@@ -14,6 +14,10 @@ var SpanChecker = &analysis.Analyzer{
 	Run:      run,
 }
 
+var PassReport = func(pass *analysis.Pass, lit *ast.BasicLit, expectedSpanName string) {
+	pass.Reportf(lit.ValuePos, "bad span name %s (expected: %s)", lit.Value, expectedSpanName)
+}
+
 func run(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		for _, declaration := range file.Decls {
@@ -24,7 +28,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 					if stmt, ok := l.(*ast.AssignStmt); ok {
 						if lit, ok := extractSpanName(stmt); ok {
 							if lit.Value != expectedSpanName {
-								pass.Reportf(lit.ValuePos, "bad span name %s (expected: %s)", lit.Value, expectedSpanName)
+								PassReport(pass, lit, expectedSpanName)
 							}
 						}
 					}
