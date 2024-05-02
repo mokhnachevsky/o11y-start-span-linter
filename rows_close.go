@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"reflect"
 )
 
 var RowsCloseChecker = &analysis.Analyzer{
@@ -14,7 +15,7 @@ var RowsCloseChecker = &analysis.Analyzer{
 	Run:      RowsCloseCheck,
 }
 
-var PassReport2 = func(pass *analysis.Pass, tokenPos token.Pos, funcName string) {
+var RowsCloseReport = func(pass *analysis.Pass, tokenPos token.Pos, funcName string) {
 	pass.Reportf(tokenPos, "function %s has not closed rows", funcName)
 }
 
@@ -22,34 +23,26 @@ func RowsCloseCheck(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		for _, declaration := range file.Decls {
 			if function, ok := declaration.(*ast.FuncDecl); ok {
-				CheckFunction(pass, function)
+				findQueryContextCalls(pass, function)
 			}
 		}
 	}
 	return nil, nil
 }
 
-func CheckFunction(pass *analysis.Pass, function *ast.FuncDecl) {
+func findQueryContextCalls(pass *analysis.Pass, function *ast.FuncDecl) {
 	for _, line := range function.Body.List {
 		if stmt, ok := line.(*ast.AssignStmt); ok {
-			if len(stmt.Rhs) == 1 {
+			if len(stmt.Lhs) == 2 && len(stmt.Rhs) == 1 {
 				if callExpr, ok := stmt.Rhs[0].(*ast.CallExpr); ok {
-					selExpr, ok := callExpr.Fun.(*ast.SelectorExpr)
-					if !ok {
-						continue
-					}
-					if selExpr.Sel.Name != "QueryContext" {
-						continue
-					}
-					if len(stmt.Lhs) != 2 {
-						continue
-					}
-					rowsStmt, ok := stmt.Lhs[0].(*ast.Ident)
-					if !ok {
-						continue
-					}
-					if !findDeferredClose(function, rowsStmt.Obj) {
-						PassReport2(pass, selExpr.X.Pos(), function.Name.Name)
+					if selectorExpr, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+						if selectorExpr.Sel.Name == "QueryContext" {
+							if rowsStmt, ok := stmt.Lhs[0].(*ast.Ident); ok {
+								if !functionHasDeferredRowsClose(function, rowsStmt.Obj) {
+									RowsCloseReport(pass, rowsStmt.Pos(), function.Name.Name)
+								}
+							}
+						}
 					}
 				}
 			}
@@ -57,31 +50,24 @@ func CheckFunction(pass *analysis.Pass, function *ast.FuncDecl) {
 	}
 }
 
-func findDeferredClose(function *ast.FuncDecl, object *ast.Object) bool {
-	objectAssignee, ok := object.Decl.(*ast.AssignStmt)
+func functionHasDeferredRowsClose(function *ast.FuncDecl, rowsObject *ast.Object) bool {
+	objectAssignee, ok := rowsObject.Decl.(*ast.AssignStmt)
 	if !ok {
 		return false
 	}
 	objectDeclarationPosition := objectAssignee.TokPos
 
 	for _, line := range function.Body.List {
-		if stmt, ok := line.(*ast.DeferStmt); ok {
-			selExpr, ok := stmt.Call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				funcLit, ok := stmt.Call.Fun.(*ast.FuncLit)
-				if !ok {
-					continue
-				}
-				if checkLambdaDefer(funcLit, objectDeclarationPosition) {
+		if deferStmt, ok := line.(*ast.DeferStmt); ok {
+			switch reflect.TypeOf(deferStmt.Call.Fun).String() {
+			case "*ast.FuncLit":
+				if checkLambdaFunc(deferStmt.Call.Fun.(*ast.FuncLit), objectDeclarationPosition) {
 					return true
-				} else {
-					continue
 				}
-			}
-			if checkCloseCall(selExpr, objectDeclarationPosition) {
-				return true
-			} else {
-				continue
+			case "*ast.SelectorExpr":
+				if checkCloseCall(deferStmt.Call.Fun.(*ast.SelectorExpr), objectDeclarationPosition) {
+					return true
+				}
 			}
 		}
 	}
@@ -92,22 +78,18 @@ func checkCloseCall(selExpr *ast.SelectorExpr, objectDeclarationPosition token.P
 	if selExpr.Sel.Name != "Close" {
 		return false
 	}
-	x, ok := selExpr.X.(*ast.Ident)
-	if !ok {
-		return false
-	}
-	xAssignee, ok := x.Obj.Decl.(*ast.AssignStmt)
-	if !ok {
-		return false
-	}
-	if xAssignee.TokPos == objectDeclarationPosition {
-		return true
+	if x, ok := selExpr.X.(*ast.Ident); ok {
+		if xAssignee, ok := x.Obj.Decl.(*ast.AssignStmt); ok {
+			if xAssignee.TokPos == objectDeclarationPosition {
+				return true
+			}
+		}
 	}
 	return false
 }
 
-func checkLambdaDefer(funcLit *ast.FuncLit, objectDeclarationPosition token.Pos) bool {
-	for _, line := range funcLit.Body.List {
+func checkLambdaFunc(fun *ast.FuncLit, objectDeclarationPosition token.Pos) bool {
+	for _, line := range fun.Body.List {
 		if stmt, ok := line.(*ast.AssignStmt); ok {
 			if len(stmt.Rhs) != 1 {
 				continue
@@ -116,8 +98,6 @@ func checkLambdaDefer(funcLit *ast.FuncLit, objectDeclarationPosition token.Pos)
 				if selExpr, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
 					if checkCloseCall(selExpr, objectDeclarationPosition) {
 						return true
-					} else {
-						continue
 					}
 				}
 			}
