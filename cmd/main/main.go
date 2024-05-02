@@ -2,7 +2,7 @@ package main
 
 import (
 	spanchecker "github.com/mokhnachevsky/o11y-start-span-linter"
-	"golang.org/x/tools/go/analysis/singlechecker"
+	"golang.org/x/tools/go/analysis/multichecker"
 	"os"
 )
 
@@ -11,5 +11,8 @@ func main() {
 		os.Args = append(os.Args, "./...")
 	}
 
-	singlechecker.Main(spanchecker.SpanChecker)
+	multichecker.Main(
+		spanchecker.SpanChecker,
+		spanchecker.RowsCloseChecker,
+	)
 }
