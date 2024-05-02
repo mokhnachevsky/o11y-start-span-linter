@@ -65,10 +65,12 @@ func extractSpanName(stmt *ast.AssignStmt) (*ast.BasicLit, bool) {
 			if len(callExpr.Args) != 2 {
 				return nil, false
 			}
-			if selExpr, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
-				if selExpr.Sel.Name != "StartSpan" {
-					return nil, false
-				}
+			selExpr, ok := callExpr.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return nil, false
+			}
+			if selExpr.Sel.Name != "StartSpan" {
+				return nil, false
 			}
 
 			if lit, ok := callExpr.Args[1].(*ast.BasicLit); ok {
